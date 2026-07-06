@@ -1,0 +1,13 @@
+name: "信息不对称"
+description: "部分 Agent 只能看到市场均价，验证信息优势"
+n_retailers: 4
+base_demand: 1000
+price_sensitivity: 50
+noise_std: 10
+unit_cost: 8.0
+holding_cost: 0.1
+stockout_penalty: 2.0
+info_mode: "partial"
+max_steps: 150
+decision_interval: 5
+brand_noise: 0.2

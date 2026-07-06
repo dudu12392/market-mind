@@ -1,0 +1,13 @@
+name: "品牌差异化 - 低频战略决策"
+description: "30% 品牌扰动，每 5 步调价，模拟品牌忠诚"
+n_retailers: 4
+base_demand: 1000
+price_sensitivity: 50
+noise_std: 10
+unit_cost: 8.0
+holding_cost: 0.1
+stockout_penalty: 2.0
+info_mode: "full"
+max_steps: 150
+decision_interval: 5
+brand_noise: 0.3
