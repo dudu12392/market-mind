@@ -1,13 +1,15 @@
-"""Final experiment: LLM vs 3 rule-based agents, 150-step long game."""
+# Created: 2024-07-06
+# Final experiment: LLM vs 3 rule-based agents, 150-step long game.
 
 from __future__ import annotations
 
-import os
+import csv
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 import matplotlib.pyplot as plt
-import numpy as np
+import yaml
 
 from src.agents import CostPlusAgent, LLMAgent, MatchLowestAgent, RandomAgent
 from src.environment import Action, MarketConfig, MarketEnv, Observation
@@ -17,6 +19,7 @@ from src.environment import Action, MarketConfig, MarketEnv, Observation
 # ═══════════════════════════════════════════════════════════════════════════
 
 CONFIG = MarketConfig(
+    name="品牌差异化 - 低频战略决策",
     n_retailers=4,
     base_demand=1000,
     price_sensitivity=50,
@@ -45,12 +48,22 @@ COLORS: dict[str, str] = {
 }
 
 # ═══════════════════════════════════════════════════════════════════════════
+# Timestamped output folder
+# ═══════════════════════════════════════════════════════════════════════════
+
+EXP_TIMESTAMP = datetime.now().strftime("exp_%Y%m%d_%H%M%S")
+output_dir = Path("output") / EXP_TIMESTAMP
+output_dir.mkdir(parents=True, exist_ok=True)
+
+# ═══════════════════════════════════════════════════════════════════════════
 # Setup
 # ═══════════════════════════════════════════════════════════════════════════
 
 env = MarketEnv(CONFIG)
 
-llm_agent = LLMAgent("r_0", unit_cost=CONFIG.unit_cost, total_steps=150)
+llm_agent = LLMAgent(
+    "r_0", unit_cost=CONFIG.unit_cost, total_steps=150, brand_noise=CONFIG.brand_noise
+)
 agents = [
     llm_agent,
     RandomAgent("r_1", unit_cost=CONFIG.unit_cost),
@@ -65,7 +78,11 @@ agents = [
 print("=" * 60)
 print("  LLM vs Rules — 150-step Battle")
 print("=" * 60)
-print(f"  decision_interval={CONFIG.decision_interval}  brand_noise={CONFIG.brand_noise}")
+print(f"  Experiment:  {EXP_TIMESTAMP}")
+print(f"  Output:      {output_dir}")
+print(
+    f"  decision_interval={CONFIG.decision_interval}  brand_noise={CONFIG.brand_noise}"
+)
 print(f"  LLM: {llm_agent.model} @ {llm_agent.base_url}")
 print()
 
@@ -85,11 +102,8 @@ for step_idx in range(CONFIG.max_steps):
     obs_list, info = env.step(actions)
     sales_map: dict[str, float] = info.get("sales", {})
 
-    # Record per-agent log
     for agent in agents:
-        new_obs = next(
-            o for o in obs_list if o.self_state.id == agent.agent_id
-        )
+        new_obs = next(o for o in obs_list if o.self_state.id == agent.agent_id)
         s = new_obs.self_state
         profit = s.capital - capital_before[agent.agent_id]
         logs.append(
@@ -106,7 +120,6 @@ for step_idx in range(CONFIG.max_steps):
             }
         )
 
-    # Store LLM analysis
     analysis = llm_agent.last_analysis
     llm_analysis_log.append(
         f"[Step {info['step']:>3}] market_total_inv={obs_list[0].market_total_inventory:.1f} "
@@ -114,7 +127,6 @@ for step_idx in range(CONFIG.max_steps):
         f"  {analysis}\n"
     )
 
-    # Real-time print (every 10 steps)
     if info["step"] % 10 == 0 or info["step"] == 1:
         print(
             f"  Step {info['step']:>3} | "
@@ -124,13 +136,37 @@ for step_idx in range(CONFIG.max_steps):
         )
 
 # ═══════════════════════════════════════════════════════════════════════════
+# Save config dump
+# ═══════════════════════════════════════════════════════════════════════════
+
+config_dict = CONFIG.model_dump()
+config_dict["experiment_timestamp"] = EXP_TIMESTAMP
+config_dict["llm_model"] = llm_agent.model
+config_dict["llm_temperature"] = llm_agent.temperature
+config_dict["agents"] = ["LLMAgent", "RandomAgent", "CostPlusAgent", "MatchLowestAgent"]
+
+config_path = output_dir / "config_dump.yaml"
+config_path.write_text(
+    yaml.dump(
+        config_dict, allow_unicode=True, default_flow_style=False, sort_keys=False
+    ),
+    encoding="utf-8",
+)
+
+print(f"\n{'=' * 50}")
+print("  Experiment Configuration")
+print(f"{'=' * 50}")
+print(
+    yaml.dump(
+        config_dict, allow_unicode=True, default_flow_style=False, sort_keys=False
+    )
+)
+print(f"  Saved: {config_path}")
+
+# ═══════════════════════════════════════════════════════════════════════════
 # Results
 # ═══════════════════════════════════════════════════════════════════════════
 
-output_dir = Path("output")
-output_dir.mkdir(exist_ok=True)
-
-# ── Final ranking ──
 final_step = max(r["step"] for r in logs)
 print(f"\n{'=' * 50}")
 print(f"  Final capital ranking (step {final_step})")
@@ -151,7 +187,7 @@ calls = int(stats["calls"])
 successes = int(stats["successes"])
 total_ms = float(stats["total_ms"])
 print(f"\n{'─' * 30}")
-print(f"  LLM API Stats")
+print("  LLM API Stats")
 print(f"{'─' * 30}")
 print(f"  Calls:      {calls}")
 print(f"  Successes:  {successes}")
@@ -164,17 +200,6 @@ print(f"  Avg latency: {total_ms / calls:.0f}ms" if calls > 0 else "  N/A")
 # ═══════════════════════════════════════════════════════════════════════════
 
 agent_ids = sorted({r["agent_id"] for r in logs})
-steps_range = sorted({r["step"] for r in logs})
-
-# Helper: extract series per agent
-def _series(key: str) -> dict[str, list]:
-    out: dict[str, list] = {aid: [] for aid in agent_ids}
-    for s in steps_range:
-        for aid in agent_ids:
-            row = [r for r in logs if r["step"] == s and r["agent_id"] == aid]
-            out[aid].append(row[0][key] if row else np.nan)
-    return out
-
 
 # ── Plot 1: Profit comparison ──
 fig1, ax1 = plt.subplots(figsize=(12, 7))
@@ -191,7 +216,7 @@ ax1.legend(fontsize=10)
 ax1.grid(True, alpha=0.3)
 fig1.savefig(output_dir / "profit_comparison.png", dpi=150, bbox_inches="tight")
 plt.close(fig1)
-print(f"\n  Saved: output/profit_comparison.png")
+print(f"\n  Saved: {output_dir / 'profit_comparison.png'}")
 
 # ── Plot 2: Price strategy ──
 fig2, ax2 = plt.subplots(figsize=(12, 7))
@@ -199,7 +224,9 @@ for aid in agent_ids:
     rows = [r for r in logs if r["agent_id"] == aid]
     st = [r["step"] for r in rows]
     pr = [r["price"] for r in rows]
-    ax2.step(st, pr, label=AGENT_LABELS[aid], color=COLORS[aid], linewidth=1.5, where="post")
+    ax2.step(
+        st, pr, label=AGENT_LABELS[aid], color=COLORS[aid], linewidth=1.5, where="post"
+    )
 ax2.set_xlabel("Step", fontsize=12)
 ax2.set_ylabel("Price", fontsize=12)
 ax2.set_title("Price Strategy (sticky, interval=5)", fontsize=14, fontweight="bold")
@@ -207,7 +234,7 @@ ax2.legend(fontsize=10)
 ax2.grid(True, alpha=0.3)
 fig2.savefig(output_dir / "price_strategy.png", dpi=150, bbox_inches="tight")
 plt.close(fig2)
-print("  Saved: output/price_strategy.png")
+print(f"  Saved: {output_dir / 'price_strategy.png'}")
 
 # ── Plot 3: Market share ──
 fig3, ax3 = plt.subplots(figsize=(12, 7))
@@ -215,7 +242,9 @@ for aid in agent_ids:
     rows = [r for r in logs if r["agent_id"] == aid]
     st = [r["step"] for r in rows]
     ms = [r["market_share"] * 100 for r in rows]
-    ax3.plot(st, ms, label=AGENT_LABELS[aid], color=COLORS[aid], linewidth=1.5, alpha=0.85)
+    ax3.plot(
+        st, ms, label=AGENT_LABELS[aid], color=COLORS[aid], linewidth=1.5, alpha=0.85
+    )
 ax3.set_xlabel("Step", fontsize=12)
 ax3.set_ylabel("Market Share (%)", fontsize=12)
 ax3.set_title("Market Share Evolution", fontsize=14, fontweight="bold")
@@ -223,13 +252,33 @@ ax3.legend(fontsize=10)
 ax3.grid(True, alpha=0.3)
 fig3.savefig(output_dir / "market_share.png", dpi=150, bbox_inches="tight")
 plt.close(fig3)
-print("  Saved: output/market_share.png")
+print(f"  Saved: {output_dir / 'market_share.png'}")
 
 # ── Export LLM analysis log ──
 analysis_path = output_dir / "llm_analysis_log.txt"
 analysis_path.write_text("\n".join(llm_analysis_log), encoding="utf-8")
-print(f"  Saved: output/llm_analysis_log.txt  ({len(llm_analysis_log)} entries)")
+print(f"  Saved: {analysis_path}  ({len(llm_analysis_log)} entries)")
+
+# ── Export CSV ──
+csv_path = output_dir / "results.csv"
+if logs:
+    fieldnames = [
+        "step",
+        "agent_id",
+        "price",
+        "order_qty",
+        "inventory",
+        "sales",
+        "profit",
+        "capital",
+    ]
+    with open(csv_path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        for row in logs:
+            writer.writerow({k: row[k] for k in fieldnames})
+    print(f"  Saved: {csv_path}  ({len(logs)} rows)")
 
 print(f"\n{'=' * 60}")
-print("  Experiment complete!")
+print(f"  Experiment complete!  →  {output_dir}")
 print(f"{'=' * 60}")

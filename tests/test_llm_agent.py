@@ -2,7 +2,6 @@
 
 from unittest.mock import patch
 
-import pytest
 
 from src.agents.llm_agent import LLMAgent
 from src.environment import Action, Observation, RetailerState
@@ -11,6 +10,7 @@ UNIT_COST = 8.0
 
 
 # ── Helper ──────────────────────────────────────────────────────────────────
+
 
 def _make_obs(step: int = 1) -> Observation:
     return Observation(
@@ -26,6 +26,7 @@ def _make_obs(step: int = 1) -> Observation:
 
 # ── Tests ───────────────────────────────────────────────────────────────────
 
+
 class TestLLMAgentBasic:
     def test_mock_successful_response(self) -> None:
         """Mock returns valid JSON; agent should parse it correctly."""
@@ -33,7 +34,9 @@ class TestLLMAgentBasic:
         agent.api_key = "sk-mock-key"  # Enable LLM path
         obs = _make_obs()
 
-        mock_response = '{"analysis": "市场平稳，保持现价", "price": 12.0, "order_qty": 80}'
+        mock_response = (
+            '{"analysis": "市场平稳，保持现价", "price": 12.0, "order_qty": 80}'
+        )
 
         with patch.object(agent, "_call_llm", return_value=mock_response) as mock:
             action = agent.act(obs)
@@ -51,9 +54,9 @@ class TestLLMAgentBasic:
         agent.api_key = "sk-mock-key"
         obs = _make_obs()
 
-        mock_response = '''```json
+        mock_response = """```json
 {"analysis": "测试", "price": 15.5, "order_qty": 30}
-```'''
+```"""
 
         with patch.object(agent, "_call_llm", return_value=mock_response):
             action = agent.act(obs)
@@ -70,7 +73,9 @@ class TestLLMAgentFallback:
         obs = _make_obs()
 
         # All LLM calls return garbage
-        with patch.object(agent, "_call_llm", return_value="not valid json {{{}}}") as mock:
+        with patch.object(
+            agent, "_call_llm", return_value="not valid json {{{}}}"
+        ) as mock:
             action = agent.act(obs)
 
         # 1 initial + 2 correction retries = 3 calls
@@ -126,18 +131,17 @@ class TestLLMAgentMemory:
         steps = [m["step"] for m in agent.memory]
         assert steps == [1, 2, 3, 4, 5]
 
-    def test_memory_caps_at_ten(self) -> None:
-        """After more than 10 calls, memory should keep only the last 10."""
+    def test_memory_caps_at_five(self) -> None:
+        """After more than 5 calls, memory should keep only the last 5."""
         agent = LLMAgent("r_0", unit_cost=UNIT_COST)
         agent.api_key = "sk-mock-key"
         mock_response = '{"analysis": "ok", "price": 10.0, "order_qty": 40}'
 
         with patch.object(agent, "_call_llm", return_value=mock_response):
-            for i in range(15):
+            for i in range(10):
                 obs = _make_obs(step=i + 1)
                 agent.act(obs)
 
-        assert len(agent.memory) == 10
-        # Should contain steps 6-15 (the last 10)
+        assert len(agent.memory) == 5
         steps = [m["step"] for m in agent.memory]
-        assert steps == list(range(6, 16))
+        assert steps == list(range(6, 11))

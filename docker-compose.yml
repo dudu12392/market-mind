@@ -1,0 +1,14 @@
+services:
+  app:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    ports:
+      - "8501:8501"
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - OPENAI_BASE_URL=${OPENAI_BASE_URL}
+      - LLM_MODEL=${LLM_MODEL}
+    env_file:
+      - ../.env
+    restart: unless-stopped

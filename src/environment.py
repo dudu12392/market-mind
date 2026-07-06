@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import Any
 
 import numpy as np
 import structlog
@@ -12,6 +12,7 @@ logger = structlog.get_logger(__name__)
 
 
 # ── Data Models ────────────────────────────────────────────────────────────
+
 
 class RetailerState(BaseModel):
     """State of a single retailer."""
@@ -53,12 +54,13 @@ class Observation(BaseModel):
 
     self_state: RetailerState
     step: int
-    competitors_info: dict
+    competitors_info: dict[str, Any]
     market_total_inventory: float = 0.0
     my_market_share: float = 0.0
 
 
 # ── MarketEnv ──────────────────────────────────────────────────────────────
+
 
 class MarketEnv:
     """Multi-retailer market simulation environment."""
@@ -99,9 +101,7 @@ class MarketEnv:
         self._init_retailers()
         return self._build_observations()
 
-    def step(
-        self, actions: dict[str, Action]
-    ) -> tuple[list[Observation], dict]:
+    def step(self, actions: dict[str, Action]) -> tuple[list[Observation], dict]:
         """
         Execute one simulation step.
 
@@ -112,9 +112,7 @@ class MarketEnv:
             Tuple of (observations, info).
         """
         # 1. Update prices (only on decision steps) and order_qty (always)
-        is_decision_step = (
-            self.step_counter % self.config.decision_interval == 0
-        )
+        is_decision_step = self.step_counter % self.config.decision_interval == 0
         for rid, action in actions.items():
             if rid not in self.retailers:
                 continue
@@ -127,12 +125,8 @@ class MarketEnv:
             self.retailers[rid].price = self.current_prices[rid]
 
         # Snapshot inventories before this step (used for profit calc)
-        prices = np.array(
-            [self.current_prices[rid] for rid in self.retailers]
-        )
-        inventories_before = np.array(
-            [r.inventory for r in self.retailers.values()]
-        )
+        prices = np.array([self.current_prices[rid] for rid in self.retailers])
+        inventories_before = np.array([r.inventory for r in self.retailers.values()])
         retailer_ids = list(self.retailers.keys())
 
         # 2. Calculate total market demand
@@ -140,9 +134,7 @@ class MarketEnv:
         noise = self._rng.normal(0.0, self.config.noise_std)
         Q_total: float = max(
             0.0,
-            self.config.base_demand
-            - self.config.price_sensitivity * avg_price
-            + noise,
+            self.config.base_demand - self.config.price_sensitivity * avg_price + noise,
         )
 
         # 3. Allocate demand via attractiveness (1/price * brand_noise)
@@ -172,9 +164,7 @@ class MarketEnv:
         # 5. Profit calculation
         revenue = prices * actual_sales
         cost_of_goods = self.config.unit_cost * actual_sales
-        holding_costs = (
-            self.config.holding_cost * (inventories_before - actual_sales)
-        )
+        holding_costs = self.config.holding_cost * (inventories_before - actual_sales)
         stockout_penalties = self.config.stockout_penalty * shortfalls
         profits = revenue - cost_of_goods - holding_costs - stockout_penalties
 
@@ -186,8 +176,7 @@ class MarketEnv:
 
         # Store sales and total demand for observation
         self._last_sales = {
-            rid: float(actual_sales[idx])
-            for idx, rid in enumerate(retailer_ids)
+            rid: float(actual_sales[idx]) for idx, rid in enumerate(retailer_ids)
         }
         self._last_total_demand = Q_total
 
@@ -230,14 +219,11 @@ class MarketEnv:
             }
 
         for rid, r in self.retailers.items():
+            competitors_info: dict[str, Any]
             if full_mode:
-                competitors_info = {
-                    k: v for k, v in all_states.items() if k != rid
-                }
+                competitors_info = {k: v for k, v in all_states.items() if k != rid}
             else:
-                others = [
-                    s for oid, s in self.retailers.items() if oid != rid
-                ]
+                others = [s for oid, s in self.retailers.items() if oid != rid]
                 if others:
                     avg_mkt_price = float(np.mean([s.price for s in others]))
                     total_mkt_inv = float(sum(s.inventory for s in others))

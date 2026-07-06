@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 from typing import Any
 
@@ -16,6 +15,7 @@ from src.environment import Action, MarketConfig, MarketEnv
 logger = structlog.get_logger(__name__)
 
 # ── 1. run_episode ──────────────────────────────────────────────────────────
+
 
 def run_episode(
     env: MarketEnv,
@@ -32,24 +32,70 @@ def run_episode(
     obs_list = env.reset()
 
     for step_idx in range(max_steps):
-        # ── Build actions from each agent ──
+        # ── Build actions from each agent (safe-lookup, no StopIteration) ──
         actions: dict[str, Action] = {}
         capital_before: dict[str, float] = {}
 
         for agent in agents:
-            # Find the observation matching this agent
-            obs = next(o for o in obs_list if o.self_state.id == agent.agent_id)
+            obs = None
+            for o in obs_list:
+                if o.self_state.id == agent.agent_id:
+                    obs = o
+                    break
+            if obs is None:
+                logger.warning(
+                    "agent_observation_missing",
+                    agent_id=agent.agent_id,
+                    step=step_idx,
+                )
+                continue
             capital_before[agent.agent_id] = obs.self_state.capital
             actions[agent.agent_id] = agent.act(obs)
 
-        obs_list, info = env.step(actions)
+        # ── Step with fallback ──
+        try:
+            obs_list, info = env.step(actions)
+        except Exception:
+            import traceback
 
-        # ── Record per-agent metrics ──
+            logger.error(
+                "step_crashed",
+                step=step_idx,
+                traceback=traceback.format_exc(),
+            )
+            # Conservative fallback for all agents
+            fallback_info: dict[str, Any] = {
+                "step": env.step_counter + 1,
+                "avg_price": env.config.unit_cost * 1.5,
+                "total_demand": 0.0,
+                "sales": {},
+            }
+            for agent in agents:
+                logs.append(
+                    {
+                        "step": fallback_info["step"],
+                        "agent_id": agent.agent_id,
+                        "price": env.config.unit_cost * 1.5,
+                        "order_qty": 50,
+                        "inventory": 0.0,
+                        "sales": 0.0,
+                        "profit": 0.0,
+                        "capital": capital_before.get(agent.agent_id, 0.0),
+                    }
+                )
+            env.step_counter += 1
+            continue
+
+        # ── Record per-agent metrics (safe-lookup) ──
         sales_map: dict[str, float] = info.get("sales", {})
         for agent in agents:
-            new_obs = next(
-                o for o in obs_list if o.self_state.id == agent.agent_id
-            )
+            new_obs = None
+            for o in obs_list:
+                if o.self_state.id == agent.agent_id:
+                    new_obs = o
+                    break
+            if new_obs is None:
+                continue
             state = new_obs.self_state
             profit = state.capital - capital_before[agent.agent_id]
 
@@ -78,6 +124,7 @@ def run_episode(
 
 # ── 2. load_config ──────────────────────────────────────────────────────────
 
+
 def load_config(path: str | Path) -> MarketConfig:
     """Load MarketConfig from a YAML file."""
     with open(path, "r", encoding="utf-8") as f:
@@ -86,6 +133,7 @@ def load_config(path: str | Path) -> MarketConfig:
 
 
 # ── 3. create_agents ────────────────────────────────────────────────────────
+
 
 def create_agents(config: MarketConfig, agent_types: list[str]) -> list[BaseAgent]:
     """Factory: instantiate agents by type string.
@@ -119,7 +167,12 @@ if __name__ == "__main__":
         "cost_plus": "CostPlus",
         "match_lowest": "MatchLowest",
     }
-    COLORS = {"llm": "#6366f1", "random": "#f59e0b", "cost_plus": "#10b981", "match_lowest": "#ef4444"}
+    COLORS = {
+        "llm": "#6366f1",
+        "random": "#f59e0b",
+        "cost_plus": "#10b981",
+        "match_lowest": "#ef4444",
+    }
 
     config = MarketConfig(
         n_retailers=len(AGENT_TYPES),
@@ -134,7 +187,7 @@ if __name__ == "__main__":
     env = MarketEnv(config)
 
     print(f"Starting 4-agent battle: {', '.join(AGENT_TYPES)}")
-    print(f"LLM model: gpt-4o-mini  |  Steps: 100\n")
+    print("LLM model: gpt-4o-mini  |  Steps: 100\n")
 
     logs = run_episode(env, agents, max_steps=100)
 
@@ -151,14 +204,19 @@ if __name__ == "__main__":
         capitals = [r["capital"] for r in rows]
         atype = AGENT_TYPES[int(aid.split("_")[1])]
         ax.plot(
-            steps, capitals,
-            label=LABELS[atype], color=COLORS[atype], linewidth=2,
+            steps,
+            capitals,
+            label=LABELS[atype],
+            color=COLORS[atype],
+            linewidth=2,
         )
 
     ax.axhline(y=10000, color="gray", linestyle="--", alpha=0.5, label="Break-even")
     ax.set_xlabel("Step", fontsize=12)
     ax.set_ylabel("Capital", fontsize=12)
-    ax.set_title("4-Agent Battle: Profit Comparison (100 steps)", fontsize=14, fontweight="bold")
+    ax.set_title(
+        "4-Agent Battle: Profit Comparison (100 steps)", fontsize=14, fontweight="bold"
+    )
     ax.legend(fontsize=10, loc="upper left")
     ax.grid(True, alpha=0.3)
 
@@ -176,12 +234,18 @@ if __name__ == "__main__":
             final_capitals[r["agent_id"]] = LABELS[atype]
 
     ranking = sorted(
-        [(aid, r["capital"]) for r in logs if r["step"] == final_step for aid in [r["agent_id"]]],
-        key=lambda x: x[1], reverse=True,
+        [
+            (aid, r["capital"])
+            for r in logs
+            if r["step"] == final_step
+            for aid in [r["agent_id"]]
+        ],
+        key=lambda x: x[1],
+        reverse=True,
     )
-    print(f"\n{'='*50}")
+    print(f"\n{'=' * 50}")
     print(f"  Final capital ranking (step {final_step})")
-    print(f"{'='*50}")
+    print(f"{'=' * 50}")
     for rank, (aid, cap) in enumerate(ranking, start=1):
         medal = {1: "[1st]", 2: "[2nd]", 3: "[3rd]", 4: "[4th]"}[rank]
         label = final_capitals.get(aid, aid)
